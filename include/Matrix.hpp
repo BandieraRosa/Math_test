@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <iostream>
-#include <ostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "Types.hpp"
@@ -19,8 +21,24 @@ class Matrix
   size_t cols_;
   std::vector<DataType> data_;
 
-  constexpr static DataType EPSILON =
-      static_cast<double>(std::numeric_limits<DataType>::epsilon()) * 100.0;
+  constexpr static DataType DEFAULT_EPSILON = []()
+  {
+    if constexpr (std::floating_point<DataType>)
+    {
+      return std::numeric_limits<DataType>::epsilon() * DataType(100);
+    }
+    else
+    {
+      return DataType(0);
+    }
+  }();
+
+  /** 以当前列最大绝对值为参考的相对阈值 */
+  static DataType RelativeEpsilon(DataType col_max_abs)
+    requires FloatingPoint<DataType>
+  {
+    return DEFAULT_EPSILON * std::max(col_max_abs, std::numeric_limits<DataType>::min());
+  }
 
   template <MatrixUnit U>
   friend class Matrix;
@@ -33,6 +51,20 @@ class Matrix
     {
       throw std::invalid_argument("Matrix dimensions must be positive");
     }
+  }
+
+  Matrix(size_t rows, size_t cols, std::initializer_list<DataType> init)
+      : rows_(rows), cols_(cols), data_(rows * cols, DataType(0))
+  {
+    if (rows == 0 || cols == 0)
+    {
+      throw std::invalid_argument("Matrix dimensions must be positive");
+    }
+    if (init.size() > rows * cols)
+    {
+      throw std::invalid_argument("Too many initializer elements");
+    }
+    std::copy(init.begin(), init.end(), data_.begin());
   }
 
   ~Matrix() = default;
@@ -55,7 +87,18 @@ class Matrix
   {
     if (row >= rows_ || col >= cols_)
     {
-      throw std::out_of_range("Matrix index out of range");
+      throw std::out_of_range("Matrix index out of range: (" + std::to_string(row) +
+                              ", " + std::to_string(col) + ")");
+    }
+    return data_[row * cols_ + col];
+  }
+
+  const DataType& At(size_t row, size_t col) const
+  {
+    if (row >= rows_ || col >= cols_)
+    {
+      throw std::out_of_range("Matrix index out of range: (" + std::to_string(row) +
+                              ", " + std::to_string(col) + ")");
     }
     return data_[row * cols_ + col];
   }
@@ -100,6 +143,42 @@ class Matrix
     return std::sqrt(sum);
   }
 
+  bool operator==(const Matrix<DataType>& other) const
+  {
+    if (rows_ != other.rows_ || cols_ != other.cols_)
+    {
+      return false;
+    }
+    for (size_t i = 0; i < data_.size(); ++i)
+    {
+      if (data_[i] != other.data_[i])
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool operator!=(const Matrix<DataType>& other) const { return !(*this == other); }
+
+  bool ApproxEqual(const Matrix<DataType>& other, double tol = 1e-9) const
+    requires FloatingPoint<DataType>
+  {
+    if (rows_ != other.rows_ || cols_ != other.cols_)
+    {
+      return false;
+    }
+    for (size_t i = 0; i < data_.size(); ++i)
+    {
+      if (std::abs(static_cast<double>(data_[i]) - static_cast<double>(other.data_[i])) >
+          tol)
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
   template <MatrixUnit OtherType>
     requires Addable<DataType, OtherType, CommonType<DataType, OtherType>>
   Matrix<CommonType<DataType, OtherType>> operator+(const Matrix<OtherType>& other) const
@@ -109,7 +188,7 @@ class Matrix
     {
       throw std::invalid_argument("Matrix dimensions must match for addition");
     }
-    Matrix<CommonType<DataType, OtherType>> result(rows_, cols_);
+    Matrix<ResultType> result(rows_, cols_);
     for (size_t i = 0; i < rows_; ++i)
     {
       for (size_t j = 0; j < cols_; ++j)
@@ -139,16 +218,21 @@ class Matrix
     return *this;
   }
 
-  friend Matrix<DataType> operator+(Matrix<DataType>&& lhs, const Matrix<DataType>& rhs)
+  template <MatrixUnit OtherType>
+    requires Addable<DataType, OtherType, CommonType<DataType, OtherType>>
+  friend Matrix<CommonType<DataType, OtherType>> operator+(Matrix<DataType>&& lhs,
+                                                           const Matrix<OtherType>& rhs)
   {
-    lhs += rhs;
-    return std::move(lhs);
-  }
-
-  friend Matrix<DataType> operator-(Matrix<DataType>&& lhs, const Matrix<DataType>& rhs)
-  {
-    lhs -= rhs;
-    return std::move(lhs);
+    using ResultType = CommonType<DataType, OtherType>;
+    if constexpr (std::is_same_v<DataType, ResultType>)
+    {
+      lhs += rhs;
+      return std::move(lhs);
+    }
+    else
+    {
+      return static_cast<const Matrix<DataType>&>(lhs) + rhs;
+    }
   }
 
   template <MatrixUnit OtherType>
@@ -160,7 +244,7 @@ class Matrix
     {
       throw std::invalid_argument("Matrix dimensions must match for subtraction");
     }
-    Matrix<CommonType<DataType, OtherType>> result(rows_, cols_);
+    Matrix<ResultType> result(rows_, cols_);
     for (size_t i = 0; i < rows_; ++i)
     {
       for (size_t j = 0; j < cols_; ++j)
@@ -191,6 +275,23 @@ class Matrix
   }
 
   template <MatrixUnit OtherType>
+    requires Subtractable<DataType, OtherType, CommonType<DataType, OtherType>>
+  friend Matrix<CommonType<DataType, OtherType>> operator-(Matrix<DataType>&& lhs,
+                                                           const Matrix<OtherType>& rhs)
+  {
+    using ResultType = CommonType<DataType, OtherType>;
+    if constexpr (std::is_same_v<DataType, ResultType>)
+    {
+      lhs -= rhs;
+      return std::move(lhs);
+    }
+    else
+    {
+      return static_cast<const Matrix<DataType>&>(lhs) - rhs;
+    }
+  }
+
+  template <MatrixUnit OtherType>
     requires Multipliable<DataType, OtherType, CommonType<DataType, OtherType>>
   Matrix<CommonType<DataType, OtherType>> operator*(const Matrix<OtherType>& other) const
   {
@@ -205,10 +306,10 @@ class Matrix
     {
       for (size_t j = 0; j < cols_; ++j)
       {
+        auto a_ij = static_cast<ResultType>((*this)(i, j));
         for (size_t k = 0; k < other.cols_; ++k)
         {
-          result(i, k) += static_cast<ResultType>((*this)(i, j)) *
-                          static_cast<ResultType>(other(j, k));
+          result(i, k) += a_ij * static_cast<ResultType>(other(j, k));
         }
       }
     }
@@ -249,24 +350,45 @@ class Matrix
     requires Divisible<DataType, Scalar, CommonType<DataType, Scalar>>
   Matrix<CommonType<DataType, Scalar>> operator/(Scalar scalar) const
   {
-    using R = CommonType<DataType, Scalar>;
-    if (scalar == Scalar(0))
+    using ResultType = CommonType<DataType, Scalar>;
+    if constexpr (std::floating_point<Scalar>)
     {
-      throw std::invalid_argument("Division by zero");
+      if (std::abs(scalar) < std::numeric_limits<Scalar>::min())
+      {
+        throw std::invalid_argument("Division by near-zero scalar");
+      }
     }
-    Matrix<R> result(rows_, cols_);
+    else
+    {
+      if (scalar == Scalar(0))
+      {
+        throw std::invalid_argument("Division by zero");
+      }
+    }
+    Matrix<ResultType> result(rows_, cols_);
     for (size_t i = 0; i < data_.size(); ++i)
     {
-      result.data_[i] = static_cast<R>(data_[i]) / static_cast<R>(scalar);
+      result.data_[i] =
+          static_cast<ResultType>(data_[i]) / static_cast<ResultType>(scalar);
     }
     return result;
   }
 
   Matrix<DataType>& operator/=(DataType scalar)
   {
-    if (scalar == DataType(0))
+    if constexpr (std::floating_point<DataType>)
     {
-      throw std::invalid_argument("Division by zero");
+      if (std::abs(scalar) < std::numeric_limits<DataType>::min())
+      {
+        throw std::invalid_argument("Division by near-zero scalar");
+      }
+    }
+    else
+    {
+      if (scalar == DataType(0))
+      {
+        throw std::invalid_argument("Division by zero");
+      }
     }
     for (auto& v : data_)
     {
@@ -307,10 +429,13 @@ class Matrix
     for (size_t col = 0; col < N; ++col)
     {
       size_t pivot = col;
+      DataType max_abs = std::abs(aug(col, col));
       for (size_t row = col + 1; row < N; ++row)
       {
-        if (std::abs(aug(row, col)) > std::abs(aug(pivot, col)))
+        DataType abs_val = std::abs(aug(row, col));
+        if (abs_val > max_abs)
         {
+          max_abs = abs_val;
           pivot = row;
         }
       }
@@ -324,9 +449,11 @@ class Matrix
       }
 
       DataType diag = aug(col, col);
-      if (std::abs(diag) < EPSILON)
+
+      if (std::abs(diag) < RelativeEpsilon(max_abs))
       {
-        throw std::runtime_error("Matrix is singular and cannot be inverted");
+        throw std::runtime_error(
+            "Matrix is singular or nearly singular and cannot be inverted");
       }
 
       for (size_t j = 0; j < 2 * N; ++j)
@@ -375,10 +502,13 @@ class Matrix
     for (size_t col = 0; col < n; ++col)
     {
       size_t pivot = col;
+      DataType max_abs = std::abs(lu(col, col));
       for (size_t row = col + 1; row < n; ++row)
       {
-        if (std::abs(lu(row, col)) > std::abs(lu(pivot, col)))
+        DataType abs_val = std::abs(lu(row, col));
+        if (abs_val > max_abs)
         {
+          max_abs = abs_val;
           pivot = row;
         }
       }
@@ -392,7 +522,7 @@ class Matrix
         det = -det;
       }
 
-      if (std::abs(lu(col, col)) < EPSILON)
+      if (std::abs(lu(col, col)) < RelativeEpsilon(max_abs))
       {
         return DataType(0);
       }
@@ -436,8 +566,6 @@ class Matrix
       os << "\n";
     }
   }
-
- private:
 };
 
 #endif  // MATRIX_H
