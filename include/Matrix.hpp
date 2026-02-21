@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -33,11 +34,10 @@ class Matrix
     }
   }();
 
-  /** 以当前列最大绝对值为参考的相对阈值 */
-  static DataType RelativeEpsilon(DataType col_max_abs)
+  static DataType SingularityTolerance(DataType matrix_norm)
     requires FloatingPoint<DataType>
   {
-    return DEFAULT_EPSILON * std::max(col_max_abs, std::numeric_limits<DataType>::min());
+    return DEFAULT_EPSILON * std::max(matrix_norm, std::numeric_limits<DataType>::min());
   }
 
   template <MatrixUnit U>
@@ -67,14 +67,46 @@ class Matrix
     std::copy(init.begin(), init.end(), data_.begin());
   }
 
+  Matrix(size_t rows, size_t cols, const DataType* data)
+      : rows_(rows), cols_(cols), data_(data, data + rows * cols)
+  {
+    if (rows == 0 || cols == 0)
+    {
+      throw std::invalid_argument("Matrix dimensions must be positive");
+    }
+    if (data == nullptr)
+    {
+      throw std::invalid_argument("Data pointer must not be null");
+    }
+  }
+
+  Matrix(size_t rows, size_t cols, std::vector<DataType> data)
+      : rows_(rows), cols_(cols), data_(std::move(data))
+  {
+    if (rows == 0 || cols == 0)
+    {
+      throw std::invalid_argument("Matrix dimensions must be positive");
+    }
+    if (data_.size() != rows * cols)
+    {
+      throw std::invalid_argument("Data size (" + std::to_string(data_.size()) +
+                                  ") does not match matrix dimensions (" +
+                                  std::to_string(rows) + " x " + std::to_string(cols) +
+                                  " = " + std::to_string(rows * cols) + ")");
+    }
+  }
+
   ~Matrix() = default;
   Matrix(const Matrix&) = default;
   Matrix& operator=(const Matrix&) = default;
   Matrix(Matrix&&) noexcept = default;
   Matrix& operator=(Matrix&&) noexcept = default;
 
-  size_t Rows() const { return rows_; }
-  size_t Cols() const { return cols_; }
+  size_t Rows() const noexcept { return rows_; }
+  size_t Cols() const noexcept { return cols_; }
+
+  DataType* Data() noexcept { return data_.data(); }
+  const DataType* Data() const noexcept { return data_.data(); }
 
   DataType& operator()(size_t row, size_t col) { return data_[row * cols_ + col]; }
 
@@ -133,7 +165,7 @@ class Matrix
   }
 
   /** Frobenius 范数 */
-  double Norm() const
+  DataType NormF() const
   {
     double sum = 0.0;
     for (const auto& v : data_)
@@ -141,6 +173,23 @@ class Matrix
       sum += static_cast<double>(v) * static_cast<double>(v);
     }
     return std::sqrt(sum);
+  }
+
+  /** 无穷范数 */
+  DataType NormInf() const
+    requires FloatingPoint<DataType>
+  {
+    DataType max_row_sum = DataType(0);
+    for (size_t i = 0; i < rows_; ++i)
+    {
+      DataType row_sum = DataType(0);
+      for (size_t j = 0; j < cols_; ++j)
+      {
+        row_sum += std::abs((*this)(i, j));
+      }
+      max_row_sum = std::max(max_row_sum, row_sum);
+    }
+    return max_row_sum;
   }
 
   bool operator==(const Matrix<DataType>& other) const
@@ -316,6 +365,16 @@ class Matrix
     return result;
   }
 
+  Matrix<DataType>& operator*=(const Matrix<DataType>& other)
+  {
+    if (cols_ != other.rows_)
+    {
+      throw std::invalid_argument("Matrix dimensions incompatible for multiplication");
+    }
+    *this = *this * other;
+    return *this;
+  }
+
   template <typename Scalar>
     requires Multipliable<DataType, Scalar, CommonType<DataType, Scalar>>
   Matrix<CommonType<DataType, Scalar>> operator*(Scalar scalar) const
@@ -416,6 +475,7 @@ class Matrix
       throw std::invalid_argument("Only square matrices can be inverted");
     }
     const size_t N = rows_;
+    DataType tol = SingularityTolerance(this->NormInf());
     Matrix aug(N, 2 * N, DataType(0));
     for (size_t i = 0; i < N; ++i)
     {
@@ -450,10 +510,13 @@ class Matrix
 
       DataType diag = aug(col, col);
 
-      if (std::abs(diag) < RelativeEpsilon(max_abs))
+      if (std::abs(diag) < tol)
       {
         throw std::runtime_error(
-            "Matrix is singular or nearly singular and cannot be inverted");
+            "Matrix is singular or nearly singular and cannot be inverted"
+            " (pivot |" +
+            std::to_string(std::abs(diag)) + "| < tol " + std::to_string(tol) +
+            " at col " + std::to_string(col) + ")");
       }
 
       for (size_t j = 0; j < 2 * N; ++j)
@@ -496,6 +559,7 @@ class Matrix
     }
 
     size_t n = rows_;
+    DataType tol = SingularityTolerance(this->NormInf());
     Matrix<DataType> lu(*this);
     DataType det = DataType(1);
 
@@ -522,7 +586,7 @@ class Matrix
         det = -det;
       }
 
-      if (std::abs(lu(col, col)) < RelativeEpsilon(max_abs))
+      if (std::abs(lu(col, col)) < tol)
       {
         return DataType(0);
       }
@@ -557,14 +621,45 @@ class Matrix
     {
       os << name << " =\n";
     }
-    for (size_t i = 0; i < rows_; ++i)
+    os << *this;
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const Matrix<DataType>& mat)
+  {
+    /* 第一遍扫描：确定最大元素宽度以对齐列 */
+    int max_width = 1;
+    std::ostringstream probe;
+    probe << std::setprecision(static_cast<int>(os.precision()));
+    for (size_t i = 0; i < mat.rows_; ++i)
     {
-      for (size_t j = 0; j < cols_; ++j)
+      for (size_t j = 0; j < mat.cols_; ++j)
       {
-        os << (*this)(i, j) << " ";
+        probe.str("");
+        probe.clear();
+        probe << mat(i, j);
+        int w = static_cast<int>(probe.str().size());
+        if (w > max_width)
+        {
+          max_width = w;
+        }
       }
-      os << "\n";
     }
+
+    /* 第二遍：格式化输出 */
+    for (size_t i = 0; i < mat.rows_; ++i)
+    {
+      os << (i == 0 ? "[[" : " [");
+      for (size_t j = 0; j < mat.cols_; ++j)
+      {
+        if (j > 0)
+        {
+          os << ", ";
+        }
+        os << std::setw(max_width) << mat(i, j);
+      }
+      os << (i == mat.rows_ - 1 ? "]]\n" : "]\n");
+    }
+    return os;
   }
 };
 
