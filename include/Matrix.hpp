@@ -101,19 +101,21 @@ class Matrix
   }
 
   template <MatrixUnit OtherType>
-    requires Addable<DataType, OtherType, DataType>
-  Matrix<DataType> operator+(const Matrix<OtherType>& other) const
+    requires Addable<DataType, OtherType, CommonType<DataType, OtherType>>
+  Matrix<CommonType<DataType, OtherType>> operator+(const Matrix<OtherType>& other) const
   {
+    using ResultType = CommonType<DataType, OtherType>;
     if (rows_ != other.rows_ || cols_ != other.cols_)
     {
       throw std::invalid_argument("Matrix dimensions must match for addition");
     }
-    Matrix<DataType> result(rows_, cols_);
+    Matrix<CommonType<DataType, OtherType>> result(rows_, cols_);
     for (size_t i = 0; i < rows_; ++i)
     {
       for (size_t j = 0; j < cols_; ++j)
       {
-        result(i, j) = (*this)(i, j) + static_cast<DataType>(other(i, j));
+        result(i, j) =
+            static_cast<ResultType>((*this)(i, j)) + static_cast<ResultType>(other(i, j));
       }
     }
     return result;
@@ -137,28 +139,34 @@ class Matrix
     return *this;
   }
 
-  template <MatrixUnit OtherType>
-    requires Addable<DataType, OtherType, DataType>
-  friend Matrix<DataType> operator+(Matrix<DataType>&& lhs, const Matrix<OtherType>& rhs)
+  friend Matrix<DataType> operator+(Matrix<DataType>&& lhs, const Matrix<DataType>& rhs)
   {
     lhs += rhs;
     return std::move(lhs);
   }
 
-  template <MatrixUnit OtherType>
-    requires Subtractable<DataType, OtherType, DataType>
-  Matrix<DataType> operator-(const Matrix<OtherType>& other) const
+  friend Matrix<DataType> operator-(Matrix<DataType>&& lhs, const Matrix<DataType>& rhs)
   {
+    lhs -= rhs;
+    return std::move(lhs);
+  }
+
+  template <MatrixUnit OtherType>
+    requires Subtractable<DataType, OtherType, CommonType<DataType, OtherType>>
+  Matrix<CommonType<DataType, OtherType>> operator-(const Matrix<OtherType>& other) const
+  {
+    using ResultType = CommonType<DataType, OtherType>;
     if (rows_ != other.rows_ || cols_ != other.cols_)
     {
       throw std::invalid_argument("Matrix dimensions must match for subtraction");
     }
-    Matrix<DataType> result(rows_, cols_);
+    Matrix<CommonType<DataType, OtherType>> result(rows_, cols_);
     for (size_t i = 0; i < rows_; ++i)
     {
       for (size_t j = 0; j < cols_; ++j)
       {
-        result(i, j) = (*this)(i, j) - static_cast<DataType>(other(i, j));
+        result(i, j) =
+            static_cast<ResultType>((*this)(i, j)) - static_cast<ResultType>(other(i, j));
       }
     }
     return result;
@@ -183,36 +191,49 @@ class Matrix
   }
 
   template <MatrixUnit OtherType>
-    requires Multipliable<DataType, OtherType, DataType>
-  Matrix<DataType> operator*(const Matrix<OtherType>& other) const
+    requires Multipliable<DataType, OtherType, CommonType<DataType, OtherType>>
+  Matrix<CommonType<DataType, OtherType>> operator*(const Matrix<OtherType>& other) const
   {
+    using ResultType = CommonType<DataType, OtherType>;
     if (cols_ != other.rows_)
     {
       throw std::invalid_argument("Matrix dimensions incompatible for multiplication");
     }
-    Matrix<DataType> result(rows_, other.cols_, DataType(0));
+
+    Matrix<ResultType> result(rows_, other.cols_, ResultType(0));
     for (size_t i = 0; i < rows_; ++i)
     {
       for (size_t j = 0; j < cols_; ++j)
       {
         for (size_t k = 0; k < other.cols_; ++k)
         {
-          result(i, k) += (*this)(i, j) * static_cast<DataType>(other(j, k));
+          result(i, k) += static_cast<ResultType>((*this)(i, j)) *
+                          static_cast<ResultType>(other(j, k));
         }
       }
     }
     return result;
   }
 
-  /** 标量右乘 */
-  Matrix<DataType> operator*(DataType scalar) const
+  template <typename Scalar>
+    requires Multipliable<DataType, Scalar, CommonType<DataType, Scalar>>
+  Matrix<CommonType<DataType, Scalar>> operator*(Scalar scalar) const
   {
-    Matrix<DataType> result(*this);
-    for (auto& v : result.data_)
+    using R = CommonType<DataType, Scalar>;
+    Matrix<R> result(rows_, cols_);
+    for (size_t i = 0; i < data_.size(); ++i)
     {
-      v *= scalar;
+      result.data_[i] = static_cast<R>(data_[i]) * static_cast<R>(scalar);
     }
     return result;
+  }
+
+  template <typename Scalar>
+    requires Multipliable<Scalar, DataType, CommonType<Scalar, DataType>>
+  inline friend Matrix<CommonType<Scalar, DataType>> operator*(Scalar scalar,
+                                                               const Matrix<DataType>& m)
+  {
+    return m * scalar;
   }
 
   Matrix<DataType>& operator*=(DataType scalar)
@@ -224,9 +245,44 @@ class Matrix
     return *this;
   }
 
-  inline friend Matrix<DataType> operator*(DataType scalar, const Matrix<DataType>& m)
+  template <typename Scalar>
+    requires Divisible<DataType, Scalar, CommonType<DataType, Scalar>>
+  Matrix<CommonType<DataType, Scalar>> operator/(Scalar scalar) const
   {
-    return m * scalar;
+    using R = CommonType<DataType, Scalar>;
+    if (scalar == Scalar(0))
+    {
+      throw std::invalid_argument("Division by zero");
+    }
+    Matrix<R> result(rows_, cols_);
+    for (size_t i = 0; i < data_.size(); ++i)
+    {
+      result.data_[i] = static_cast<R>(data_[i]) / static_cast<R>(scalar);
+    }
+    return result;
+  }
+
+  Matrix<DataType>& operator/=(DataType scalar)
+  {
+    if (scalar == DataType(0))
+    {
+      throw std::invalid_argument("Division by zero");
+    }
+    for (auto& v : data_)
+    {
+      v /= scalar;
+    }
+    return *this;
+  }
+
+  Matrix<DataType> operator-() const
+  {
+    Matrix<DataType> result(rows_, cols_);
+    for (size_t i = 0; i < data_.size(); ++i)
+    {
+      result.data_[i] = -data_[i];
+    }
+    return result;
   }
 
   /** 带列主元选取的高斯-约尔当消元法求逆 */
