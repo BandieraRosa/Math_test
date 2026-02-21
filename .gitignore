@@ -1,0 +1,108 @@
+# C++ .gitignore - common patterns
+
+# Build artifacts
+/bin/
+/build/
+/out/
+/dist/
+*.o
+*.obj
+*.lo
+*.lai
+*.la
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.elf
+*.hex
+*.bin
+*.map
+
+# C/C++ precompiled headers and generated files
+*.gch
+*.pch
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# Compilers, linkers, debuggers
+*.ilk
+*.pdb
+*.idb
+*.stackdump
+
+# Static analysis / coverage
+*.gcno
+*.gcda
+*.lcov
+coverage.*
+
+# Build system files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+conanbuildinfo.*
+conaninfo.txt
+vcpkg_installed/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.iml
+*.suo
+*.user
+*.userprefs
+*.ncb
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+.ipch/
+
+# Xcode
+xcuserdata/
+*.xcworkspace
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Temporary files
+*~
+*.swp
+*.tmp
+*.temp
+*.log
+*.bak
+*.old
+*.orig
+*.rej
+.nfs*
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Package manager caches
+.ccache/
+*.tgz
+*.zip
+
+# Embedded/firmware
+*.hex
+*.srec
+
+# Misc generated files
+*.d
+
+.vscode/
+.cache/
